@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RoadWatch – Report road damage</title>
+<title>Eco Watch – Report waterlogging, leaks and garbage</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
@@ -61,6 +61,7 @@ textarea{min-height:80px;resize:vertical}
 .btn.block{width:100%;margin-top:8px}
 .pill{display:inline-block;margin-top:10px;padding:6px 10px;border-radius:8px;background:var(--bg);font-size:.85rem}
 
+.grp{margin:10px 0 6px;font-weight:600;font-size:.82rem;color:var(--mute)}
 .opts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
 .opts button{border:1.5px solid var(--line);background:var(--card);border-radius:20px;padding:7px 14px}
 .opts button.on{border-color:var(--ink);background:var(--ink);color:var(--card)}
@@ -94,6 +95,9 @@ textarea{min-height:80px;resize:vertical}
 .pop img{width:100%;border-radius:6px;margin:6px 0}
 .pop button,.pop select{margin-top:6px;padding:4px 8px}
 .pin{width:22px;height:22px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:3px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.5)}
+.pin.prog{border-color:#2457d6}
+.legend{background:var(--card);color:var(--ink);padding:8px 11px;border-radius:8px;font-size:.78rem;line-height:1.7;box-shadow:0 1px 6px rgba(0,0,0,.3)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
 .pick{background:var(--blue);width:26px;height:26px}
 #toast{position:fixed;left:50%;top:78px;max-width:92vw;text-align:center;transform:translateX(-50%);background:var(--ink);color:var(--card);padding:10px 18px;border-radius:10px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:9999}
 #toast.show{opacity:1}
@@ -101,20 +105,21 @@ textarea{min-height:80px;resize:vertical}
 </head>
 <body>
 <header class="top">
-  <div><h1>RoadWatch</h1><p>See a damaged road? Pin it, snap it, get it fixed.</p></div>
+  <div><h1>Eco Watch</h1><p>Waterlogging, leaks or garbage? Pin it, snap it, get it fixed.</p></div>
   <div class="chips" id="stats"></div>
+  <span class="chip" id="mode" style="font-size:.8rem"></span>
   <button class="icon" id="theme" aria-label="Toggle dark mode">Dark</button>
 </header>
 
 <div class="app">
   <aside class="panel">
-    <nav class="tabs"><button class="on" data-tab="report">Report damage</button><button data-tab="list">All reports</button></nav>
+    <nav class="tabs"><button class="on" data-tab="report">Report a problem</button><button data-tab="list">All reports</button></nav>
 
     <section id="tab-report" style="display:flex;flex-direction:column;gap:14px;flex:1">
       <ol class="steps" id="steps"></ol>
 
       <div class="step on" data-s="1">
-        <h2>Where is the damage?</h2>
+        <h2>Where is the problem?</h2>
         <p class="hint">Search a place, use your location, or tap the map. You can drag the blue pin to adjust.</p>
         <div class="row"><input type="search" id="q" placeholder="Search street or area" aria-label="Search place"><button class="btn" id="go">Search</button></div>
         <button class="btn block" id="locBtn">Use my current location</button>
@@ -122,9 +127,9 @@ textarea{min-height:80px;resize:vertical}
       </div>
 
       <div class="step" data-s="2">
-        <h2>What kind of damage?</h2>
+        <h2>What is the problem?</h2>
         <p class="hint">Pick the closest match.</p>
-        <div class="opts" id="types"></div>
+        <div id="types"></div>
         <h3>How bad is it?</h3>
         <div class="sev" id="sevs" style="margin-top:8px"></div>
       </div>
@@ -132,7 +137,7 @@ textarea{min-height:80px;resize:vertical}
       <div class="step" data-s="3">
         <h2>Add a photo and note</h2>
         <p class="hint">Both are optional, but photos help officials act faster.</p>
-        <textarea id="desc" maxlength="300" placeholder="e.g. Deep pothole near the bus stop, bikes are swerving" aria-label="Description"></textarea>
+        <textarea id="desc" maxlength="300" placeholder="e.g. Knee-deep water outside the school gate, or garbage piling up near the bus stop" aria-label="Description"></textarea>
         <label class="drop" id="drop"><input type="file" id="photo" accept="image/*" hidden><span id="dropTxt">Tap to take or choose a photo, or drop one here</span></label>
       </div>
 
@@ -146,6 +151,7 @@ textarea{min-height:80px;resize:vertical}
     </section>
 
     <section id="tab-list" hidden>
+      <div class="filters" id="ftr" style="margin-bottom:8px"></div>
       <div class="filters" id="fst"></div>
       <div id="items"></div>
     </section>
@@ -161,19 +167,21 @@ textarea{min-height:80px;resize:vertical}
 const SUPABASE_URL = "";
 const SUPABASE_KEY = ""; // public anon key
 // ------------------------------------------------------------------------------------------------
-const demo = !SUPABASE_URL;
-const sb = demo ? null : supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const sbUrl = SUPABASE_URL.trim(), sbKey = SUPABASE_KEY.trim();
+const demo = !(sbUrl && sbKey);
+const sb = demo ? null : supabase.createClient(sbUrl, sbKey);
 const isAdmin = new URLSearchParams(location.search).get("admin") === "1";
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const COLORS = { Low: "#e9b100", Medium: "#f77f00", High: "#e5383b" };
-const TYPES = ["Pothole", "Crack", "Waterlogging", "Broken edge", "Open manhole"];
-const SEVS = [["Low", "Minor, drivable"], ["Medium", "Slows traffic"], ["High", "Dangerous"]];
+const TRACKS = { "Heat and Water": ["Waterlogging", "Flooded street", "Water leak"], "Waste and Energy": ["Garbage dump", "E-waste pile"], "Air": ["Burning waste"] };
+const TRACK = {}; Object.entries(TRACKS).forEach(([k, v]) => v.forEach(t => (TRACK[t] = k)));
+const SEVS = [["Low", "Minor, can wait"], ["Medium", "Affects daily life"], ["High", "Urgent health risk"]];
 const toast = t => { const e = $("toast"); e.textContent = t; e.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove("show"), 2600); };
 
 window.addEventListener('error', e => toast('Error: ' + e.message));
 /* ---------- data layer ---------- */
-const local = { get: () => JSON.parse(localStorage.getItem("roadwatch") || "[]"), set: v => localStorage.setItem("roadwatch", JSON.stringify(v)) };
+const local = { get: () => JSON.parse(localStorage.getItem("ecowatch") || "[]"), set: v => localStorage.setItem("ecowatch", JSON.stringify(v)) };
 function toDataURL(file) {
   return new Promise(res => {
     const img = new Image(), r = new FileReader();
@@ -214,8 +222,18 @@ let map = { setView: noop, on: noop, flyTo: noop, removeLayer: noop }, layer = {
 const markers = {};
 if (hasMap) {
   map = L.map("map").setView([20.59, 78.96], 5);
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }).addTo(map);
+  const street = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Tiles © Esri" }).addTo(map);
+  const sat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Imagery © Esri" });
+  const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, referrerPolicy: "origin", attribution: "© OpenStreetMap contributors" });
+  L.control.layers({ "Street": street, "OpenStreetMap": osm, "Satellite": sat }, null, { position: "topright" }).addTo(map);
+  const chain = [street, sat]; let ci = 0, fails = 0;
+  chain.forEach((l, i) => l.on("tileerror", () => {
+    if (i === ci && ++fails === 4 && ci < chain.length - 1) { map.removeLayer(chain[ci]); ci++; fails = 0; chain[ci].addTo(map); toast("That map source was blocked, so I switched to another one."); }
+  }));
   layer = L.layerGroup().addTo(map);
+  const lg = L.control({ position: "bottomleft" });
+  lg.onAdd = () => { const d = L.DomUtil.create("div", "legend"); d.innerHTML = `<b>Map guide</b><br><i style="background:#e5383b"></i>High: urgent risk<br><i style="background:#f77f00"></i>Medium: affects daily life<br><i style="background:#e9b100"></i>Low: minor<br><i style="background:#12926f"></i>Fixed<br><i style="background:#fff;border:2px solid #2457d6"></i>Blue edge: in progress<br>Hover a pin for a quick summary`; return d; };
+  lg.addTo(map);
   pinIcon = (c, cls = "") => L.divIcon({ className: "", html: `<div class="pin ${cls}" style="background:${c}"></div>`, iconSize: [22, 22], iconAnchor: [11, 22] });
 } else {
   $("map").innerHTML = '<p style="padding:20px">The map could not load. Check your internet, turn off any ad blocker, and refresh. You can still search a place or use your location.</p>';
@@ -223,7 +241,7 @@ if (hasMap) {
 let pinM = null;
 
 /* ---------- wizard ---------- */
-const S = { step: 1, pick: null, type: "Pothole", sev: "Medium", file: null };
+const S = { step: 1, pick: null, type: "Waterlogging", sev: "Medium", file: null };
 const NAMES = ["Location", "Details", "Photo", "Review"];
 
 function setPick(lat, lng) {
@@ -248,7 +266,7 @@ async function search() {
 $("go").onclick = search;
 $("q").onkeydown = e => { if (e.key === "Enter") search(); };
 
-$("types").innerHTML = TYPES.map(t => `<button type="button" data-v="${t}">${t}</button>`).join("");
+$("types").innerHTML = Object.entries(TRACKS).map(([k, v]) => `<div class="grp">${k}</div><div class="opts">${v.map(t => `<button type="button" data-v="${t}">${t}</button>`).join("")}</div>`).join("");
 $("sevs").innerHTML = SEVS.map(([v, d]) => `<button type="button" data-v="${v}"><b>${v}</b><small>${d}</small></button>`).join("");
 $("types").onclick = e => { const b = e.target.closest("button"); if (b) { S.type = b.dataset.v; drawSteps(); } };
 $("sevs").onclick = e => { const b = e.target.closest("button"); if (b) { S.sev = b.dataset.v; drawSteps(); } };
@@ -283,7 +301,7 @@ $("next").onclick = async () => {
     await api.add({ lat: S.pick.lat, lng: S.pick.lng, type: S.type, severity: S.sev, description: $("desc").value.trim() }, S.file);
     map.setView([S.pick.lat, S.pick.lng], 17);
     if (pinM) { map.removeLayer(pinM); pinM = null; }
-    Object.assign(S, { step: 1, pick: null, type: "Pothole", sev: "Medium", file: null });
+    Object.assign(S, { step: 1, pick: null, type: "Waterlogging", sev: "Medium", file: null });
     $("desc").value = ""; $("photo").value = ""; setFile(null); $("coords").textContent = "No location selected";
     drawSteps(); await refresh(); setTab("list"); toast("Report submitted. Thank you!");
   } catch (e) { toast("Couldn't submit: " + e.message); }
@@ -298,20 +316,23 @@ function setTab(t) {
 }
 document.querySelector(".tabs").onclick = e => { const b = e.target.closest("button"); if (b) setTab(b.dataset.tab); };
 
-let all = [], fStatus = "All";
+let all = [], fStatus = "All", fTrack = "All";
 const FS = ["All", "Reported", "In Progress", "Fixed"];
+$("ftr").onclick = e => { const b = e.target.closest("button"); if (b) { fTrack = b.dataset.v; render(); } };
 $("fst").onclick = e => { const b = e.target.closest("button"); if (b) { fStatus = b.dataset.v; render(); } };
 
+const ago = d => { const n = Math.floor((Date.now() - new Date(d)) / 864e5); return n < 1 ? "today" : n + "d ago"; };
 function popup(r) {
   const adm = isAdmin ? `<br><select onchange="setStatus('${r.id}',this.value)" aria-label="Change status">${["Reported", "In Progress", "Fixed"].map(s => `<option ${s === r.status ? "selected" : ""}>${s}</option>`).join("")}</select>` : "";
-  return `<div class="pop"><b>${esc(r.type)}</b> <span class="tag ${r.severity}">${r.severity}</span>${r.image_url ? `<img src="${esc(r.image_url)}" alt="Damage photo">` : ""}<div>${esc(r.description) || "No description"}</div><span class="st ${r.status}">${r.status}</span> · ${new Date(r.created_at).toLocaleDateString()}<br><button onclick="upvote('${r.id}')">Confirm (${r.upvotes})</button>${adm}</div>`;
+  return `<div class="pop"><b>${esc(r.type)}</b> <span class="tag ${r.severity}">${r.severity}</span>${r.image_url ? `<img src="${esc(r.image_url)}" alt="Damage photo">` : ""}<div>${esc(r.description) || "No description"}</div><span class="st ${r.status}">${r.status}</span> · reported ${ago(r.created_at)}<br><button onclick="upvote('${r.id}')">Confirm (${r.upvotes})</button>${adm}</div>`;
 }
 function render() {
-  const rows = all.filter(r => fStatus === "All" || r.status === fStatus);
+  const rows = all.filter(r => (fStatus === "All" || r.status === fStatus) && (fTrack === "All" || TRACK[r.type] === fTrack));
   layer.clearLayers();
-  if (hasMap) rows.forEach(r => { markers[r.id] = L.marker([r.lat, r.lng], { icon: pinIcon(COLORS[r.severity]) }).bindPopup(popup(r)).addTo(layer); });
+  if (hasMap) rows.forEach(r => { markers[r.id] = L.marker([r.lat, r.lng], { icon: pinIcon(r.status === "Fixed" ? "#12926f" : COLORS[r.severity], r.status === "In Progress" ? "prog" : "") }).bindPopup(popup(r)).bindTooltip(`${esc(r.type)} · ${r.severity} · ${r.status} · ${ago(r.created_at)} · ${r.upvotes} confirms`).addTo(layer); });
+  $("ftr").innerHTML = ["All", ...Object.keys(TRACKS)].map(s => `<button data-v="${s}" class="${s === fTrack ? "on" : ""}">${s}</button>`).join("");
   $("fst").innerHTML = FS.map(s => `<button data-v="${s}" class="${s === fStatus ? "on" : ""}">${s}</button>`).join("");
-  $("items").innerHTML = rows.length ? rows.map(r => `<div class="item" tabindex="0" onclick="focusR('${r.id}')">${r.image_url ? `<img src="${esc(r.image_url)}" alt="">` : `<div class="ph"></div>`}<div><b>${esc(r.type)}</b> <span class="tag ${r.severity}">${r.severity}</span><p>${esc(r.description) || "No description"}</p><span class="st ${r.status}">${r.status}</span> · ${r.upvotes} confirms</div></div>`).join("") : `<p class="hint" style="margin-top:12px">Nothing here yet. Use "Report damage" to add the first one.</p>`;
+  $("items").innerHTML = rows.length ? rows.map(r => `<div class="item" tabindex="0" onclick="focusR('${r.id}')">${r.image_url ? `<img src="${esc(r.image_url)}" alt="">` : `<div class="ph"></div>`}<div><b>${esc(r.type)}</b> <span class="tag ${r.severity}">${r.severity}</span><p>${esc(r.description) || "No description"}</p><span class="st ${r.status}">${r.status}</span> · ${r.upvotes} confirms</div></div>`).join("") : `<p class="hint" style="margin-top:12px">Nothing here yet. Use "Report a problem" to add the first one.</p>`;
   const n = s => all.filter(r => r.status === s).length;
   $("stats").innerHTML = [["Total", all.length], ["Open", n("Reported")], ["In progress", n("In Progress")], ["Fixed", n("Fixed")]].map(([a, b]) => `<div class="chip"><b>${b}</b>${a}</div>`).join("");
 }
@@ -323,7 +344,10 @@ window.setStatus = async (id, s) => { await api.setStatus(id, s); await refresh(
 /* ---------- theme ---------- */
 $("theme").onclick = () => { const d = document.documentElement.dataset.theme === "dark"; document.documentElement.dataset.theme = d ? "light" : "dark"; $("theme").textContent = d ? "Dark" : "Light"; };
 
+$("mode").textContent = demo ? (sbUrl && !sbKey ? "Anon key missing: paste it in SUPABASE_KEY" : "Demo mode: saving in this browser only") : "Connected to Supabase";
 drawSteps(); refresh();
+const fixSize = () => map.invalidateSize && map.invalidateSize();
+setTimeout(fixSize, 300); window.addEventListener("load", fixSize); window.addEventListener("resize", fixSize);
 if (!demo) setInterval(refresh, 30000);
 </script>
 </body>
